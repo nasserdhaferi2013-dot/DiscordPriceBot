@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import asyncio
 
 # ------------------ إعداد المفاتيح ------------------
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع التوكن في Environment Variables
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ITAD_API_KEY = os.getenv("ITAD_API_KEY")
 GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
 COUNTRY = "SA"
@@ -85,24 +85,29 @@ shops_map = itad_get_shops()
 # ------------------ إعداد Discord ------------------
 intents = discord.Intents.default()
 intents.message_content = True
-bot = discord.Client(intents=intents)
+
+class MyBot(discord.Client):
+    async def setup_hook(self):
+        # بدء مهمة حذف الرسائل القديمة
+        self.bg_task = self.loop.create_task(delete_old_bot_messages())
+
+bot = MyBot(intents=intents)
 tree = app_commands.CommandTree(bot)
 
-# ------------------ حذف رسائل البوت القديمة كل 10 دقائق ------------------
+# ------------------ حذف رسائل البوت كل 10 دقائق ------------------
 async def delete_old_bot_messages():
     await bot.wait_until_ready()
     while not bot.is_closed():
-        for guild in bot.guilds:
-            for channel in guild.text_channels:
-                try:
-                    async for msg in channel.history(limit=100):
-                        if msg.author == bot.user:
-                            await msg.delete()
-                except:
-                    pass
+        try:
+            for channel in bot.get_all_channels():
+                if isinstance(channel, discord.TextChannel):
+                    async for message in channel.history(limit=100):
+                        if message.author == bot.user:
+                            await message.delete()
+                            await asyncio.sleep(0.5)  # لتجنب Rate Limit
+        except Exception as e:
+            print(f"Error deleting messages: {e}")
         await asyncio.sleep(600)  # كل 10 دقائق
-
-bot.loop.create_task(delete_old_bot_messages())
 
 # ------------------ حدث استقبال الرسائل ------------------
 @bot.event
@@ -116,7 +121,7 @@ async def on_message(message):
             title_hint = None if appid else text
             game = itad_lookup_game(appid, title_hint)
             if not game:
-                await message.reply("لم يتم العثور على اللعبة.", mention_author=True)
+                await message.reply("لم يتم العثور على اللعبة.", mention_author=False)
                 return
 
             game_id = game["id"]
@@ -124,15 +129,13 @@ async def on_message(message):
             deals = itad_get_all_prices(game_id)
 
             if not deals:
-                await message.reply(f"لا توجد عروض حالياً للعبة {game_title}.", mention_author=True)
+                await message.reply(f"لا توجد عروض حالياً للعبة {game_title}.", mention_author=False)
                 return
 
-            # ترتيب أفضل 5 عروض حسب السعر
             sorted_deals = sorted(
                 deals, key=lambda d: float(d.get("price", {}).get("amount", 0))
             )[:5]
 
-            # إنشاء Embed
             embed = discord.Embed(title=game_title, color=0x1abc9c)
             best_price_val = None
             for d in sorted_deals:
@@ -153,15 +156,16 @@ async def on_message(message):
 
             embed.set_footer(text=f"أفضل سعر: {amount_to_str(best_price_val)} {curr}")
             if normalize_title(game_title) in gamepass_set:
-                embed.color = 0x2ecc71  # أخضر إذا متوفر في Game Pass
+                embed.color = 0x2ecc71
                 embed.set_footer(text=embed.footer.text + " | متوفر في Game Pass")
             else:
-                embed.color = 0xe74c3c  # أحمر إذا غير متوفر
+                embed.color = 0xe74c3c
 
-            await message.reply(embed=embed, mention_author=True)
+            # الرد مع اقتباس الرسالة
+            await message.reply(embed=embed, mention_author=False)
 
         except Exception as e:
-            await message.reply(f"حدث خطأ: {e}", mention_author=True)
+            await message.reply(f"حدث خطأ: {e}", mention_author=False)
 
 # ------------------ تشغيل البوت ------------------
 bot.run(DISCORD_BOT_TOKEN)
