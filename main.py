@@ -1,3 +1,24 @@
+from keep_alive import keep_alive
+keep_alive()
+
+import os
+import re
+import json
+import requests
+import pandas as pd
+import discord
+from discord import app_commands
+import asyncio
+from datetime import datetime
+
+# ------------------ إعداد المفاتيح ------------------
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+ITAD_API_KEY = os.getenv("ITAD_API_KEY")
+GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
+COUNTRY = "SA"
+TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة التي تريد التحكم بها
+
+# ------------------ باقي كود البوت كما هو ------------------
 # ------------------ تشغيل Keep Alive ------------------
 from keep_alive import keep_alive
 keep_alive()
