@@ -1,3 +1,8 @@
+# ------------------ تشغيل Keep Alive ------------------
+from keep_alive import keep_alive
+keep_alive()
+
+# ------------------ باقي كود البوت كما هو ------------------
 import os
 import re
 import json
@@ -5,14 +10,15 @@ import requests
 import pandas as pd
 import discord
 from discord import app_commands
-from urllib.parse import urlparse
 import asyncio
+from datetime import datetime
 
 # ------------------ إعداد المفاتيح ------------------
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ITAD_API_KEY = os.getenv("ITAD_API_KEY")
 GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
 COUNTRY = "SA"
+TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة التي تريد التحكم بها
 
 # ------------------ دوال مساعدة ------------------
 def http_get(url, params=None, timeout=20):
@@ -85,29 +91,8 @@ shops_map = itad_get_shops()
 # ------------------ إعداد Discord ------------------
 intents = discord.Intents.default()
 intents.message_content = True
-
-class MyBot(discord.Client):
-    async def setup_hook(self):
-        # بدء مهمة حذف الرسائل القديمة
-        self.bg_task = self.loop.create_task(delete_old_bot_messages())
-
-bot = MyBot(intents=intents)
+bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
-
-# ------------------ حذف رسائل البوت كل 10 دقائق ------------------
-async def delete_old_bot_messages():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            for channel in bot.get_all_channels():
-                if isinstance(channel, discord.TextChannel):
-                    async for message in channel.history(limit=100):
-                        if message.author == bot.user:
-                            await message.delete()
-                            await asyncio.sleep(0.5)  # لتجنب Rate Limit
-        except Exception as e:
-            print(f"Error deleting messages: {e}")
-        await asyncio.sleep(600)  # كل 10 دقائق
 
 # ------------------ حدث استقبال الرسائل ------------------
 @bot.event
@@ -121,7 +106,7 @@ async def on_message(message):
             title_hint = None if appid else text
             game = itad_lookup_game(appid, title_hint)
             if not game:
-                await message.reply("لم يتم العثور على اللعبة.", mention_author=False)
+                await message.channel.send("لم يتم العثور على اللعبة.")
                 return
 
             game_id = game["id"]
@@ -129,7 +114,7 @@ async def on_message(message):
             deals = itad_get_all_prices(game_id)
 
             if not deals:
-                await message.reply(f"لا توجد عروض حالياً للعبة {game_title}.", mention_author=False)
+                await message.channel.send(f"لا توجد عروض حالياً للعبة {game_title}.")
                 return
 
             sorted_deals = sorted(
@@ -161,11 +146,32 @@ async def on_message(message):
             else:
                 embed.color = 0xe74c3c
 
-            # الرد مع اقتباس الرسالة
-            await message.reply(embed=embed, mention_author=False)
+            await message.channel.send(embed=embed)
 
         except Exception as e:
-            await message.reply(f"حدث خطأ: {e}", mention_author=False)
+            await message.channel.send(f"حدث خطأ: {e}")
+
+# ------------------ حذف كل الرسائل كل ساعة ------------------
+async def delete_all_messages_periodically():
+    await bot.wait_until_ready()
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        print("القناة المستهدفة غير موجودة")
+        return
+
+    while True:
+        try:
+            async for msg in channel.history(limit=None):
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+            print(f"[{datetime.now()}] تم حذف كل الرسائل في القناة")
+        except Exception as e:
+            print(f"خطأ أثناء الحذف: {e}")
+        await asyncio.sleep(3600)
 
 # ------------------ تشغيل البوت ------------------
+bot.loop.create_task(delete_all_messages_periodically())
 bot.run(DISCORD_BOT_TOKEN)
