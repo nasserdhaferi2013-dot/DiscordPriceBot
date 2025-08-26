@@ -1,151 +1,150 @@
 import os
 import re
-import discord
+import json
 import requests
 import pandas as pd
-from difflib import get_close_matches
-from discord.ext import commands
+import discord
+from discord import app_commands
+from urllib.parse import urlparse
 
-# --- المتغيرات البيئية ---
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+# ------------------ إعداد المفاتيح ------------------
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ضع التوكن في Environment Variables
 ITAD_API_KEY = os.getenv("ITAD_API_KEY")
 GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
+COUNTRY = "SA"
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="", intents=intents)  # بدون أمر محدد
+# ------------------ دوال مساعدة ------------------
+def http_get(url, params=None, timeout=20):
+    params = params or {}
+    params["key"] = ITAD_API_KEY
+    r = requests.get(url, params=params, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
-# --- تحميل Game Pass ---
-def load_gamepass():
-    try:
-        df = pd.read_csv(GAMEPASS_CSV_URL)
-        titles = df.iloc[:,0].dropna().tolist()
-        return [t.lower() for t in titles]
-    except Exception:
-        return []
+def http_post(url, params=None, json_body=None, timeout=20):
+    params = params or {}
+    params["key"] = ITAD_API_KEY
+    headers = {"Content-Type": "application/json"}
+    r = requests.post(url, params=params, headers=headers, data=json.dumps(json_body or []), timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
-gamepass_list = load_gamepass()
-
-# --- دوال مساعدة ---
-def extract_appid(link: str):
+def extract_appid_from_steam_link(link: str):
     m = re.search(r"store\.steampowered\.com/app/(\d+)", link)
-    if m:
-        return int(m.group(1))
-    if link.isdigit():
-        return int(link)
+    if m: return int(m.group(1))
+    if link.isdigit(): return int(link)
     return None
 
 def normalize_title(s: str) -> str:
     if not s: return ""
     s = s.lower()
     s = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", s)
-    s = " ".join(s.split())
-    return s.strip()
+    return " ".join(s.split()).strip()
 
 def amount_to_str(a: float) -> str:
     return f"{a:,.2f}"
 
-# --- استدعاء API ---
-BASE = "https://api.isthereanydeal.com"
-
-def http_get(url, params=None):
-    params = params or {}
-    params["key"] = ITAD_API_KEY
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    return r.json()
-
-def http_post(url, params=None, json_body=None):
-    params = params or {}
-    params["key"] = ITAD_API_KEY
-    headers = {"Content-Type": "application/json"}
-    r = requests.post(url, params=params, headers=headers, json=json_body, timeout=20)
-    r.raise_for_status()
-    return r.json()
-
+# ------------------ ITAD API ------------------
 def itad_lookup_game(steam_appid=None, title_hint=None):
     if steam_appid:
-        data = http_get(f"{BASE}/games/lookup/v1", {"appid": steam_appid})
-        if data.get("found"):
-            return data.get("game")
+        data = http_get("https://api.isthereanydeal.com/games/lookup/v1", {"appid": steam_appid})
+        if data.get("found"): return data.get("game")
     if title_hint:
-        res = http_get(f"{BASE}/games/search/v1", {"title": title_hint, "results": 5})
-        if isinstance(res, list) and res:
-            titles = [r["title"] for r in res]
-            match = get_close_matches(title_hint.lower(), [t.lower() for t in titles], n=1)
-            for r in res:
-                if normalize_title(r["title"]) == normalize_title(match[0]):
-                    return r
+        res = http_get("https://api.isthereanydeal.com/games/search/v1", {"title": title_hint, "results": 1})
+        if isinstance(res, list) and res: return res[0]
     return None
 
-def itad_get_all_prices(game_id, country="SA"):
+def itad_get_shops(country=COUNTRY):
+    shops = http_get("https://api.isthereanydeal.com/service/shops/v1", {"country": country})
+    return {s["id"]: s["title"] for s in shops}
+
+def itad_get_all_prices(game_id, country=COUNTRY, include_only_deals=False):
+    params = {
+        "country": country,
+        "deals": "true" if include_only_deals else "false",
+        "vouchers": "true"
+    }
     payload = [game_id]
-    res = http_post(f"{BASE}/games/prices/v3", params={"country": country}, json_body=payload)
-    if not isinstance(res, list) or not res:
-        return []
+    res = http_post("https://api.isthereanydeal.com/games/prices/v3", params=params, json_body=payload)
+    if not isinstance(res, list) or not res: return []
     return res[0].get("deals", [])
 
-# --- الرد على الرسائل ---
+# ------------------ تحميل Game Pass ------------------
+def load_gamepass_set():
+    try:
+        df = pd.read_csv(GAMEPASS_CSV_URL)
+        titles = df.iloc[:,0].dropna().tolist()
+        return {normalize_title(t) for t in titles}
+    except:
+        return set()
+
+gamepass_set = load_gamepass_set()
+shops_map = itad_get_shops()
+
+# ------------------ إعداد Discord ------------------
+intents = discord.Intents.default()
+intents.message_content = True
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
+
+# ------------------ حدث استقبال الرسائل ------------------
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    if message.author.bot: return
 
-    text = message.content.strip()
-    if not text:
-        return
+    async with message.channel.typing():
+        try:
+            text = message.content.strip()
+            appid = extract_appid_from_steam_link(text)
+            title_hint = None if appid else text
+            game = itad_lookup_game(appid, title_hint)
+            if not game:
+                await message.channel.send("لم يتم العثور على اللعبة.")
+                return
 
-    await message.channel.trigger_typing()
+            game_id = game["id"]
+            game_title = game["title"]
+            deals = itad_get_all_prices(game_id)
 
-    try:
-        appid = extract_appid(text)
-        title_hint = None if appid else text
-        game = itad_lookup_game(appid, title_hint)
-        if not game:
-            await message.channel.send("❌ لم يتم العثور على اللعبة.")
-            return
+            if not deals:
+                await message.channel.send(f"لا توجد عروض حالياً للعبة {game_title}.")
+                return
 
-        game_id = game["id"]
-        game_title = game["title"]
+            # ترتيب أفضل 5 عروض حسب السعر
+            sorted_deals = sorted(
+                deals, key=lambda d: float(d.get("price", {}).get("amount", 0))
+            )[:5]
 
-        deals = itad_get_all_prices(game_id)
-        if not deals:
-            await message.channel.send(f"ℹ️ لا توجد أسعار حالياً للعبة **{game_title}**.")
-            return
+            # إنشاء Embed
+            embed = discord.Embed(title=game_title, color=0x1abc9c)
+            best_price_val = None
+            for d in sorted_deals:
+                price_obj = d.get("price", {})
+                price_amt = float(price_obj.get("amount", 0))
+                curr = price_obj.get("currency", "USD")
+                cut = int(d.get("cut", 0))
+                url = d.get("url") or ""
+                shop_id = d.get("shop", {}).get("id")
+                shop_name = d.get("shop", {}).get("name") or shops_map.get(shop_id, f"Shop #{shop_id}")
+                embed.add_field(
+                    name=f"{shop_name} ({cut}% تخفيض)" if cut>0 else shop_name,
+                    value=f"{amount_to_str(price_amt)} {curr}\n[شراء]({url})",
+                    inline=False
+                )
+                if best_price_val is None or price_amt < best_price_val:
+                    best_price_val = price_amt
 
-        # ترتيب أفضل 5 عروض حسب السعر
-        deals_sorted = sorted(deals, key=lambda d: float(d.get("price", {}).get("amount", 999999)))[:5]
+            embed.set_footer(text=f"أفضل سعر: {amount_to_str(best_price_val)} {curr}")
+            if normalize_title(game_title) in gamepass_set:
+                embed.color = 0x2ecc71  # أخضر إذا متوفر في Game Pass
+                embed.set_footer(text=embed.footer.text + " | متوفر في Game Pass")
+            else:
+                embed.color = 0xe74c3c  # أحمر إذا غير متوفر
 
-        embed = discord.Embed(title=f"أفضل الأسعار للعبة: {game_title}", color=0x1abc9c)
-        min_price = float('inf')
-        min_index = -1
-        for i, d in enumerate(deals_sorted):
-            price_amt = float(d.get("price", {}).get("amount", 0.0))
-            if price_amt < min_price:
-                min_price = price_amt
-                min_index = i
+            await message.channel.send(embed=embed)
 
-        for i, d in enumerate(deals_sorted):
-            shop_name = d.get("shop", {}).get("name", "Unknown")
-            price_amt = float(d.get("price", {}).get("amount", 0.0))
-            curr = d.get("price", {}).get("currency", "USD")
-            cut = int(d.get("cut", 0))
-            url = d.get("url", "")
+        except Exception as e:
+            await message.channel.send(f"حدث خطأ: {e}")
 
-            line = f"{amount_to_str(price_amt)} {curr} | {cut}% خصم\n[رابط الشراء]({url})"
-            color = 0x2ecc71 if i == min_index else 0x95a5a6
-            embed.add_field(name=shop_name, value=line, inline=False)
-
-        # Game Pass
-        if normalize_title(game_title) in gamepass_list:
-            embed.set_footer(text="✅ متوفرة في Game Pass", icon_url=None)
-        else:
-            embed.set_footer(text="❌ غير متوفرة في Game Pass", icon_url=None)
-
-        await message.channel.send(embed=embed)
-
-    except Exception as e:
-        await message.channel.send(f"حدث خطأ: {str(e)}")
-
-# --- تشغيل البوت ---
+# ------------------ تشغيل البوت ------------------
 bot.run(DISCORD_BOT_TOKEN)
