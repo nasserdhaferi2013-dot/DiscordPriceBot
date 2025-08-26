@@ -1,76 +1,65 @@
 import discord
-from discord.ext import commands, tasks
-import os
-import requests
 import pandas as pd
-import difflib
+import requests
 import asyncio
+from difflib import get_close_matches
+import os
 
-# ----- إعدادات البوت -----
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
+
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = discord.Client(intents=intents)
 
-# ----- المتغيرات -----
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-ITAD_API_KEY = os.getenv("ITAD_API_KEY")
-GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
-
-# ----- تحميل قائمة Game Pass -----
-def load_gamepass():
-    df = pd.read_csv(GAMEPASS_CSV_URL)
+# تحميل CSV من Google Sheets
+def load_gamepass_csv():
+    response = requests.get(GAMEPASS_CSV_URL)
+    csv_data = response.content.decode('utf-8')
+    df = pd.read_csv(pd.compat.StringIO(csv_data))
     return df
 
-gamepass_df = load_gamepass()
+gamepass_df = load_gamepass_csv()
 
-# ----- التحقق من أقرب اسم للعبة -----
-def find_closest_game(name, game_list):
-    match = difflib.get_close_matches(name, game_list, n=1, cutoff=0.5)
-    return match[0] if match else None
+# دالة لإيجاد أقرب اسم لعبة
+def find_closest_game(query, game_list):
+    matches = get_close_matches(query, game_list, n=1, cutoff=0.5)
+    return matches[0] if matches else None
 
-# ----- مهمة حذف الرسائل القديمة -----
-@tasks.loop(minutes=1)
-async def delete_old_messages():
-    for guild in bot.guilds:
-        for channel in guild.text_channels:
-            async for msg in channel.history(limit=100):
-                if msg.pinned:
-                    continue
-                if msg.author != bot.user:
-                    await msg.delete()
-
-# ----- حدث تشغيل البوت -----
 @bot.event
 async def on_ready():
-    print(f"{bot.user} جاهز للعمل")
-    delete_old_messages.start()
+    print(f"Logged in as {bot.user}")
+    # بدء مهمة حذف الرسائل كل دقيقة في كل القنوات
+    bot.loop.create_task(periodic_cleanup())
 
-# ----- حدث استقبال الرسائل -----
+async def periodic_cleanup():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                try:
+                    async for message in channel.history(limit=100):
+                        if not message.pinned and message.author != bot.user:
+                            await message.delete()
+                except:
+                    pass
+        await asyncio.sleep(60)  # كل دقيقة
+
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author == bot.user:
         return
 
     user_content = message.content.strip()
+    closest_game = find_closest_game(user_content, gamepass_df['Game'].tolist())
 
-    # التحقق إذا اللعبة متوفرة على Game Pass
-    game_name = find_closest_game(user_content, gamepass_df['Game'].tolist())
-    if game_name:
-        row = gamepass_df[gamepass_df['Game'] == game_name].iloc[0]
-        if row['Available'] == 'Yes':
-            color = discord.Color.green()
-        else:
-            color = discord.Color.red()
-        embed = discord.Embed(title=f"أفضل سعر للعبة: {game_name}", description=f"{user_content}", color=color)
+    if closest_game:
+        reply_text = f"{message.author.mention} أفضل سعر موجود للعبة: **{closest_game}**"
     else:
-        embed = discord.Embed(title="لعبة غير موجودة", description="لم أتمكن من العثور على اللعبة التي تبحث عنها.", color=discord.Color.red())
+        reply_text = f"{message.author.mention} لم أتمكن من العثور على اللعبة."
 
-    # اقتباس الرد على المستخدم
-    await message.reply(embed=embed, mention_author=True)
+    await message.reply(reply_text)
 
-    await bot.process_commands(message)
-
-# ----- تشغيل البوت -----
 bot.run(DISCORD_BOT_TOKEN)
