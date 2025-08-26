@@ -1,71 +1,52 @@
 import discord
 from discord.ext import tasks
-import pandas as pd
-import io
 import asyncio
+import os  # نحتاجها لقراءة متغير البيئة
 
-# إعداد البوت
-intents = discord.Intents.all()
-client = discord.Client(intents=intents)
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.guilds = True
+intents.members = True
 
-# تحميل بيانات Game Pass من CSV
-csv_data = """
-Game,Link,Available
-# ضع بيانات الألعاب هنا
-Halo Infinite,https://www.microsoft.com/store/p/halo-infinite,Yes
-Forza Horizon 5,https://www.microsoft.com/store/p/forza-horizon-5,Yes
-Cyberpunk 2077,https://www.microsoft.com/store/p/cyberpunk-2077,No
-"""
-def load_gamepass_csv():
-    return pd.read_csv(io.StringIO(csv_data))
+bot = discord.Client(intents=intents)
 
-gamepass_df = load_gamepass_csv()
+# قنوات لحذف الرسائل منها (فارغة تعني كل القنوات)
+channels_to_clean = []
 
-# دالة للبحث عن أقرب اسم لعبة
-def find_closest_game(user_input, game_list):
-    user_input_lower = user_input.lower()
-    for game in game_list:
-        if game.lower() in user_input_lower:
-            return game
-    return None
-
-# المهمة الدورية لحذف الرسائل القديمة كل دقيقة (ما عدا المثبتة)
-@tasks.loop(minutes=1)
-async def cleanup_messages():
-    for guild in client.guilds:
-        for channel in guild.text_channels:
-            try:
-                async for message in channel.history(limit=100):
-                    if not message.pinned:
-                        await message.delete()
-            except Exception:
-                pass
-
-@client.event
+@bot.event
 async def on_ready():
-    print(f'{client.user} جاهز الآن!')
-    cleanup_messages.start()
+    print(f'Logged in as {bot.user}')
+    delete_old_messages.start()
 
-@client.event
+@bot.event
 async def on_message(message):
-    if message.author == client.user:
+    if message.author == bot.user:
         return
 
-    # اقتباس رسالة المستخدم والرد عليه
-    user_content = message.content
-    closest_game = find_closest_game(user_content, gamepass_df['Game'].tolist())
+    # اقتباس الرد على الشخص نفسه
+    await message.reply(f'لقد استلمت رسالتك: "{message.content}"')
 
-    embed = discord.Embed(title="سعر اللعبة", color=0xff0000)  # افتراضي أحمر
-    if closest_game:
-        row = gamepass_df.loc[gamepass_df['Game'] == closest_game].iloc[0]
-        if row['Available'] == 'Yes':
-            embed.color = 0x00ff00  # أخضر إذا متاحة
-        embed.description = f"{message.author.mention} أفضل سعر لـ **{closest_game}**: {row['Link']}"
-    else:
-        embed.description = f"{message.author.mention} اللعبة غير موجودة في قاعدة البيانات."
+# مهمة حذف الرسائل القديمة كل دقيقة
+@tasks.loop(minutes=1)
+async def delete_old_messages():
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channels_to_clean and channel.id not in channels_to_clean:
+                continue
+            try:
+                async for msg in channel.history(limit=200):
+                    if msg.pinned:
+                        continue
+                    if msg.author == bot.user:
+                        await msg.delete()
+            except Exception as e:
+                print(f"Failed to clean {channel.name}: {e}")
 
-    await message.reply(embed=embed)
+# قراءة التوكن من Environment Variable
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-# ضع هنا التوكن
-TOKEN = "توكن_البوت_هنا"
-client.run(TOKEN)
+if not TOKEN:
+    raise ValueError("يرجى تحديد متغير البيئة DISCORD_BOT_TOKEN")
+
+bot.run(TOKEN)
