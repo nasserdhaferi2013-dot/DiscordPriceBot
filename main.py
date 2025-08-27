@@ -1,29 +1,8 @@
-from keep_alive import keep_alive
-keep_alive()
-
-import os
-import re
-import json
-import requests
-import pandas as pd
-import discord
-from discord import app_commands
-import asyncio
-from datetime import datetime
-
-# ------------------ إعداد المفاتيح ------------------
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-ITAD_API_KEY = os.getenv("ITAD_API_KEY")
-GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
-COUNTRY = "SA"
-TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة التي تريد التحكم بها
-
-# ------------------ باقي كود البوت كما هو ------------------
 # ------------------ تشغيل Keep Alive ------------------
 from keep_alive import keep_alive
 keep_alive()
 
-# ------------------ باقي كود البوت كما هو ------------------
+# ------------------ جميع المكتبات وكود البوت ------------------
 import os
 import re
 import json
@@ -39,7 +18,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ITAD_API_KEY = os.getenv("ITAD_API_KEY")
 GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6UWFcSX_vdTR51P63AqtbhCQ/export?format=csv"
 COUNTRY = "SA"
-TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة التي تريد التحكم بها
+TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة
 
 # ------------------ دوال مساعدة ------------------
 def http_get(url, params=None, timeout=20):
@@ -119,7 +98,6 @@ tree = app_commands.CommandTree(bot)
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-
     async with message.channel.typing():
         try:
             text = message.content.strip()
@@ -133,14 +111,11 @@ async def on_message(message):
             game_id = game["id"]
             game_title = game["title"]
             deals = itad_get_all_prices(game_id)
-
             if not deals:
                 await message.channel.send(f"لا توجد عروض حالياً للعبة {game_title}.")
                 return
 
-            sorted_deals = sorted(
-                deals, key=lambda d: float(d.get("price", {}).get("amount", 0))
-            )[:5]
+            sorted_deals = sorted(deals, key=lambda d: float(d.get("price", {}).get("amount", 0)))[:5]
 
             embed = discord.Embed(title=game_title, color=0x1abc9c)
             best_price_val = None
@@ -168,7 +143,6 @@ async def on_message(message):
                 embed.color = 0xe74c3c
 
             await message.channel.send(embed=embed)
-
         except Exception as e:
             await message.channel.send(f"حدث خطأ: {e}")
 
@@ -179,7 +153,6 @@ async def delete_all_messages_periodically():
     if not channel:
         print("القناة المستهدفة غير موجودة")
         return
-
     while True:
         try:
             async for msg in channel.history(limit=None):
