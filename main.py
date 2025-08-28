@@ -20,6 +20,13 @@ GAMEPASS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_XZeLcypMWq2FKuRCBQ6
 COUNTRY = "SA"
 TARGET_CHANNEL_ID = 123456789012345678  # ضع هنا معرف القناة
 
+# ------------------ تحقق من المتغيرات ------------------
+if not DISCORD_BOT_TOKEN:
+    raise RuntimeError("❌ المتغير DISCORD_BOT_TOKEN غير موجود! تأكد أنك ضبطته في السيرفر.")
+
+if not ITAD_API_KEY:
+    raise RuntimeError("❌ المتغير ITAD_API_KEY غير موجود! تأكد أنك ضبطته في السيرفر.")
+
 # ------------------ دوال مساعدة ------------------
 def http_get(url, params=None, timeout=20):
     params = params or {}
